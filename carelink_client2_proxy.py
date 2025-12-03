@@ -4,11 +4,10 @@ import time
 import json
 import sys
 import signal
-import threading 
+import threading
 import logging as log
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http import HTTPStatus
-from urllib.parse import parse_qs
 import os
 
 VERSION = "1.2"
@@ -20,287 +19,178 @@ log.basicConfig(format=FORMAT, datefmt='%Y-%m-%d %H:%M:%S', level=log.INFO)
 # HTTP server settings
 HOSTNAME = "0.0.0.0"
 PORT = int(os.environ.get("PORT", 8081))
-GUIURL   = ""
-APIURL   = "carelink"
+APIURL = "carelink"
 OPT_NOHISTORY = "nohistory"
 
 UPDATE_INTERVAL = 300
-RETRY_INTERVAL  = 120
+RETRY_INTERVAL = 120
 
 # Token handling
-TOKENFILE = "logindata.json"
+CARELINK_TOKEN = os.environ.get("CARELINK_TOKEN")
 wait_for_params = True
 
 # Status messages
-STATUS_INIT     = "Initialization"
+STATUS_INIT = "Initialization"
 STATUS_DO_LOGIN = "Performing login"
 STATUS_LOGIN_OK = "Login successful"
 STATUS_NEED_TKN = "Valid token required"
 g_status = STATUS_INIT
 
 recentData = None
-verbose = False
+verbose = os.environ.get("VERBOSE", "false").lower() == "true"
 
 
-#################################################
-# The signal handler for the TERM signal
-#################################################
 def on_sigterm(signum, frame):
-   # TODO: cleanup (if any)
-   log.debug("Exiting in sigterm")
-   sys.exit()
+    log.debug("Exiting on signal")
+    sys.exit()
 
 
-#################################################
-# Get only essential data from json
-#################################################
 def get_essential_data(data):
-   mydata = ""
-   if data != None:      
-      mydata = data["patientData"].copy()
-      try:
-         del mydata["sgs"]
-      except (KeyError,TypeError) as e:
-         pass
-      try:
-         del mydata["markers"]
-      except (KeyError,TypeError) as e:
-         pass
-      try:
-         del mydata["limits"]
-      except (KeyError,TypeError) as e:
-         pass
-      try:
-         del mydata["notificationHistory"]
-      except (KeyError,TypeError) as e:
-         pass
-   return mydata
-   
-
-def webgui(status,action=None,country=""):
-   head =  '<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"> \n \
-            <html><head><title>Carelink Client 2 Proxy</title> \n \
-            <style></style> \n \
-            </head> \n \
-            <body><table style="text-align: left; width: 460px; background-color: #2196F3; font-family: Helvetica,Arial,sans-serif; font-weight: bold; color: white;" border="0" cellpadding="2" cellspacing="2"> \n \
-            <tbody><tr><td> \n \
-            <span style="vertical-align: top; font-size: 48px;">Carelink Client 2</span><br> \n \
-            </td></tr></tbody></table><br> \n'
-            
-            
-   body =  '<table style="text-align: left; width: 460px; background-color: white; font-family: Helvetica,Arial,sans-serif; font-size: 18px;" border="0" cellpadding="2" cellspacing="3"><tbody> \n \
-            <tr style="font-size: 18px; font-weight: bold; background-color: lightgrey"> \n \
-            <td style="width: 200px;">Status</td> \n \
-            <td style="background-color: white;"></td><td style="background-color: white;"></td></tr> \n \
-            <tr style="vertical-align: top; background-color: rgb(230, 230, 255);"> \n \
-            <td style="width: 300px;">%s</td> \n \
-            </tbody></table><br> \n' % (status)
-                        
-   tail =  '<span style="font-size: 16px; color: red; font-family: Helvetica,Arial,sans-serif;"></span><br> \n \
-            <table style="text-align: left; width: 460px; background-color: #2196F3;" border="0" cellpadding="2" cellspacing="2"><tbody> \n \
-            <tr><td style="vertical-align: top; text-align: center;"> \n \
-            <span style="font-family: Helvetica,Arial,sans-serif; color: white;"><a style="text-decoration:none; color: white;" href=https://github.com/ondrej1024/carelink-python-client>carelink_client2_proxy</a> | version %s | 2024</span></td></tr> \n \
-            </tbody></table></body></html>' % VERSION
-   
-   html = head + body + tail
-   return html
+    mydata = ""
+    if data is not None:
+        mydata = data["patientData"].copy()
+        for key in ["sgs", "markers", "limits", "notificationHistory"]:
+            try:
+                del mydata[key]
+            except (KeyError, TypeError):
+                pass
+    return mydata
 
 
-#################################################
-# HTTP server methods
-#################################################
+def webgui(status):
+    head = '<!DOCTYPE html><html><head><title>Carelink Proxy</title></head><body>'
+    body = f'<h2>Status: {status}</h2>'
+    tail = f'<footer>Version {VERSION} | <a href="https://github.com/ondrej1024/carelink-python-client">carelink_client2_proxy</a></footer></body></html>'
+    return head + body + tail
+
+
 class MyServer(BaseHTTPRequestHandler):
-   
-   def log_message(self, format, *args):
-      #Disable logging
-      pass
+    def log_message(self, format, *args):
+        pass  # disable logging
 
-   def do_GET(self):
-      # Security checks (if any)
-      # TODO
-      log.debug("received client GET request from %s" % (self.address_string()))
-      #print(self.path)
-      
-      # Check request path
-      if self.path.strip("/") == APIURL:
-         # Get latest Carelink data (complete)
-         response = json.dumps(recentData)
-         status_code = HTTPStatus.OK
-         content_type = "application/json"
-         #print("All data requested")
-      elif self.path.strip("/") == APIURL+'/'+OPT_NOHISTORY:
-         # Get latest Carelink data without history
-         response = json.dumps(get_essential_data(recentData))
-         status_code = HTTPStatus.OK
-         content_type = "application/json"
-         #print("Only essential data requested")
-      elif self.path == "/":
-         # Show web GUI
-         if g_status == STATUS_NEED_TKN:
-            response = webgui(status=g_status, action=GUIURL)
-         else:
+    def do_GET(self):
+        global recentData
+        log.debug("Received GET request from %s" % self.address_string())
+
+        if self.path.strip("/") == APIURL:
+            sendData = json.loads(json.dumps(recentData))
+            if sendData and "patientData" in sendData:
+                for key in ["sgs", "meterData"]:
+                    if key in sendData["patientData"]:
+                        for entry in sendData["patientData"][key]:
+                            if "value" in entry and isinstance(entry["value"], (int, float)):
+                                entry["value"] = round(entry["value"] / 18, 1)  # mg/dL → mmol/L
+
+            response = json.dumps(sendData)
+            status_code = HTTPStatus.OK
+            content_type = "application/json"
+
+        elif self.path.strip("/") == f"{APIURL}/{OPT_NOHISTORY}":
+            sendData = get_essential_data(recentData)
+            if sendData and "sgs" in sendData:
+                for entry in sendData["sgs"]:
+                    if "value" in entry and isinstance(entry["value"], (int, float)):
+                        entry["value"] = round(entry["value"] / 18, 1)
+            response = json.dumps(sendData)
+            status_code = HTTPStatus.OK
+            content_type = "application/json"
+
+        elif self.path == "/":
             response = webgui(status=g_status)
-         status_code = HTTPStatus.OK
-         content_type = "text/html"
-         #print("Setup web page requested")
-      else:
-         response = ""
-         status_code = HTTPStatus.NOT_FOUND
-         content_type = "text/html"
-         #print("page not found")
-      
-      # Send response
-      self.send_response(status_code)
-      self.send_header("Content-type", content_type)
-      self.send_header("Access-Control-Allow-Origin", "*")
-      self.end_headers()
-      try:
-         self.wfile.write(bytes(response, "utf-8"))
-      except BrokenPipeError:
-         pass
+            status_code = HTTPStatus.OK
+            content_type = "text/html"
+        else:
+            response = ""
+            status_code = HTTPStatus.NOT_FOUND
+            content_type = "text/html"
 
-   '''
-   def do_POST(self):
-      # Get request body
-      content_length = int(self.headers['Content-Length'])
-      body = self.rfile.read(content_length)
-      log.debug("received client POST request from %s" % (self.address_string()))
-      #print(body)
+        self.send_response(status_code)
+        self.send_header("Content-type", content_type)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        try:
+            self.wfile.write(bytes(response, "utf-8"))
+        except BrokenPipeError:
+            pass
 
-      # Check request path
-      if self.path.strip("/") == GUIURL:
-         # Save setup data
-         try:
-            qs = body.decode()
-            token = parse_qs(qs)['ftoken'][0]
-            country = parse_qs(qs)['fcountry'][0]
-            if token == "" or token == None:
-               raise
-            save_params(token,country)
-            time.sleep(2)
-            response = webgui(status=g_status)
-         except:
-            response = webgui(status=g_status, action=GUIURL)
-         status_code = HTTPStatus.OK
-         content_type = "text/html"
-         #print("Config data received")
-      else:
-         response = ""
-         status_code = HTTPStatus.NOT_FOUND
-   
-      # Send response
-      self.send_response(status_code)
-      self.send_header("Content-type", content_type)
-      self.send_header("Access-Control-Allow-Origin", "*")
-      self.end_headers()
-      try:
-         self.wfile.write(bytes(response, "utf-8"))
-      except BrokenPipeError:
-         pass
-   '''
 
-#################################################
-# Web server thread
-#################################################
 def webserver_thread():
-   # Init web server
-   webserver = ThreadingHTTPServer((HOSTNAME, PORT), MyServer)
-   log.debug("HTTP server started at http://%s:%s" % (HOSTNAME, PORT))
-
-   # Start server loop
-   webserver.serve_forever()
+    webserver = ThreadingHTTPServer((HOSTNAME, PORT), MyServer)
+    log.info("HTTP server started at http://%s:%s" % (HOSTNAME, PORT))
+    webserver.serve_forever()
 
 
-#################################################
-# Start web server as asynchronous thread
-#################################################
 def start_webserver():
-   t = threading.Thread(target=webserver_thread, args=())
-   t.daemon = True
-   t.start()
+    t = threading.Thread(target=webserver_thread)
+    t.daemon = True
+    t.start()
 
 
-# Parse command line 
+# CLI arguments
 parser = argparse.ArgumentParser()
-parser.add_argument('--tokenfile','-t', type=str, help='File containing auth tokens (default: %s)' % TOKENFILE, required=False)
-parser.add_argument('--wait',     '-w', type=int, help='Wait seconds between repeated calls (default 300)', required=False)
-parser.add_argument('--verbose',  '-v', help='Verbose mode', action='store_true')
+parser.add_argument('--wait', '-w', type=int, help='Wait seconds between calls', required=False)
+parser.add_argument('--verbose', '-v', help='Verbose mode', action='store_true')
 args = parser.parse_args()
 
-# Get parameters from CLI
-tokenfile = TOKENFILE if args.tokenfile == None else args.tokenfile
-wait      = UPDATE_INTERVAL if args.wait == None else args.wait
-verbose   = args.verbose
+wait = UPDATE_INTERVAL if args.wait is None else args.wait
+if args.verbose:
+    verbose = True
 
-# Logging config (verbose)
 if verbose:
-   log.enable(level=log.DEBUG)
+    log.setLevel(log.DEBUG)
 
 log.info("Starting Carelink Client Proxy (version %s)" % VERSION)
-
-# Init signal handler
 signal.signal(signal.SIGTERM, on_sigterm)
 signal.signal(signal.SIGINT, on_sigterm)
-
-# Start web server
 start_webserver()
 
 # Main process loop
 while True:
-   # Init Carelink client
-   client = carelink_client2.CareLinkClient(tokenFile=tokenfile)
-   g_status = STATUS_DO_LOGIN
-   
-   # Login to Carelink server
-   if client.init():
-      g_status = STATUS_LOGIN_OK
+    if CARELINK_TOKEN is None:
+        log.error("CARELINK_TOKEN env variable not set")
+        g_status = STATUS_NEED_TKN
+        time.sleep(10)
+        continue
 
-      # Infinite loop requesting Carelink data periodically
-      i = 0
-      while True:
-         i += 1
-         log.debug("Starting download %d" % i)
+    client = carelink_client2.CareLinkClient(token=CARELINK_TOKEN)
+    g_status = STATUS_DO_LOGIN
 
-         try:
-            recentData = client.getRecentData()
-            if recentData != None and client.getLastResponseCode() == HTTPStatus.OK:
-               log.debug("New data received")
-            elif client.getLastResponseCode() == HTTPStatus.FORBIDDEN or client.getLastResponseCode() == HTTPStatus.UNAUTHORIZED:
-               # Authorization error occured
-               log.error("ERROR: failed to get data (Authotization error, response code %d)" % client.getLastResponseCode())
-               break
-            else:
-               # Connection error occured
-               log.error("ERROR: failed to get data (Connection error, response code %d)" % client.getLastResponseCode())
-               time.sleep(60)
-               continue
-         except Exception as e:
-            log.error(e)
-            recentData = None
-            time.sleep(60)
-            continue
-            
-         # Calculate time until next reading
-         try:
-            nextReading = int(recentData["lastConduitUpdateServerTime"]/1000) + wait
-            tmoSeconds  = int(nextReading - time.time())
-            log.debug("Next reading at {0}, {1} seconds from now\n".format(nextReading,tmoSeconds))
-            if tmoSeconds < 0:
-               tmoSeconds = RETRY_INTERVAL
-         except KeyError:
-            tmoSeconds = RETRY_INTERVAL
-            #print("Retry reading {0} seconds from now\n".format(tmoSeconds))
+    if client.init():
+        g_status = STATUS_LOGIN_OK
+        i = 0
+        while True:
+            i += 1
+            log.debug("Starting download %d" % i)
 
-         log.debug("Waiting " + str(tmoSeconds) + " seconds before next download")
-         time.sleep(tmoSeconds+10)
+            try:
+                recentData = client.getRecentData()
+                code = client.getLastResponseCode()
+                if recentData and code == HTTPStatus.OK:
+                    log.debug("New data received")
+                elif code in [HTTPStatus.FORBIDDEN, HTTPStatus.UNAUTHORIZED]:
+                    log.error("Authorization error (response %d)" % code)
+                    break
+                else:
+                    log.error("Connection error (response %d)" % code)
+                    time.sleep(60)
+                    continue
+            except Exception as e:
+                log.error(e)
+                recentData = None
+                time.sleep(60)
+                continue
 
-   # Wait for new token
-   # FIXME
-   log.info(STATUS_NEED_TKN)
-   g_status = STATUS_NEED_TKN
-   wait_for_params = True
-   while wait_for_params:
-      time.sleep(0.1)
+            try:
+                nextReading = int(recentData["lastConduitUpdateServerTime"]/1000) + wait
+                tmoSeconds = int(nextReading - time.time())
+                if tmoSeconds < 0:
+                    tmoSeconds = RETRY_INTERVAL
+            except KeyError:
+                tmoSeconds = RETRY_INTERVAL
 
-# Exit         
-log.info("Exit")
+            log.debug("Waiting %d seconds before next download" % tmoSeconds)
+            time.sleep(tmoSeconds+10)
+
+    log.info(STATUS_NEED_TKN)
+    g_status = STATUS_NEED_TKN
+    time.sleep(10)
