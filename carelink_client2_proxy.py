@@ -18,7 +18,7 @@ log.basicConfig(format=FORMAT, datefmt='%Y-%m-%d %H:%M:%S', level=log.INFO)
 
 # HTTP server settings
 HOSTNAME = "0.0.0.0"
-PORT = int(os.environ.get("PORT", 8081))
+PORT = int(os.environ.get("PORT", 8080))
 APIURL = "carelink"
 OPT_NOHISTORY = "nohistory"
 
