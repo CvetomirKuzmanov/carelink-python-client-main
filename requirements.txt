@@ -1,4 +1,5 @@
 curlify==2.2.1
 pyOpenSSL==24.0.0
-Requests==2.31.0
-selenium_wire==5.1.0
+requests==2.31.0
+selenium-wire==5.1.0
+git+https://github.com/ondrej1024/carelink-python-client.git@main#egg=carelink-client2

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carelink-proxy"
+version = "1.2.0"
+description = "Carelink Python Client Proxy"
+authors = [
+    { name = "Your Name", email = "you@example.com" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "curlify==2.2.1",
+    "pyOpenSSL==24.0.0",
+    "requests==2.31.0",
+    "selenium-wire==5.1.0",
+    "carelink-client2 @ git+https://github.com/ondrej1024/carelink-python-client.git@main"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
