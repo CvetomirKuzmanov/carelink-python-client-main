@@ -9,7 +9,6 @@ description = "Carelink Python Client Proxy"
 authors = [
     { name = "Your Name", email = "you@example.com" }
 ]
-readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "curlify==2.2.1",
